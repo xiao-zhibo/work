@@ -26,12 +26,30 @@ type periodicJob struct {
 	jobName  string
 	spec     string
 	schedule cron.Schedule
+	lastEnqueueAt time.Time
 }
 
 type scheduledPeriodicJob struct {
 	scheduledAt      time.Time
 	scheduledAtEpoch int64
 	*periodicJob
+}
+
+
+func (pe *periodicJob) Next(t time.Time) time.Time {
+	switch pe.schedule.(type) {
+	case cron.ConstantDelaySchedule:
+		if !pe.lastEnqueueAt.After(time.Unix(0, 0)) {
+			pe.lastEnqueueAt = time.Now()
+		}
+		for !pe.lastEnqueueAt.After(t) {
+			pe.lastEnqueueAt = pe.schedule.Next(pe.lastEnqueueAt)
+		}
+		return pe.lastEnqueueAt
+	default:
+		return pe.schedule.Next(t)
+	}
+	return time.Unix(0, 0)
 }
 
 func newPeriodicEnqueuer(namespace string, pool *redis.Pool, periodicJobs []*periodicJob) *periodicEnqueuer {
@@ -91,7 +109,7 @@ func (pe *periodicEnqueuer) enqueue() error {
 	defer conn.Close()
 
 	for _, pj := range pe.periodicJobs {
-		for t := pj.schedule.Next(nowTime); t.Before(horizon); t = pj.schedule.Next(t) {
+		for t := pj.Next(nowTime); t.Before(horizon); t = pj.Next(t) {
 			epoch := t.Unix()
 			id := makeUniquePeriodicID(pj.jobName, pj.spec, epoch)
 
